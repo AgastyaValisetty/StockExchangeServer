@@ -12,7 +12,7 @@ from app.models import (
     TradeDB,
 )
 from app.orderbook import (
-    BookOrder,
+    OrderNode,
     global_order_book_manager,
 )
 
@@ -94,7 +94,7 @@ def submit_orders_batch(
     for order in orders:
         book = global_order_book_manager.get_book_for_symbol(order.symbol)
         book.add(
-            BookOrder(
+            OrderNode(
                 id=order.id,
                 account_id=order.account_id,
                 symbol=order.symbol,
