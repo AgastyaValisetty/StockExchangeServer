@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 from typing import Optional
 from anyio.to_thread import current_default_thread_limiter
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import ORJSONResponse
 
 from app.database import create_tables
 from app.models import OrderRequest
@@ -28,7 +29,11 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="Paper Exchange", lifespan=lifespan)
+app = FastAPI(
+    title="Paper Exchange",
+    default_response_class=ORJSONResponse,
+    lifespan=lifespan,
+)
 
 
 @app.post("/orders", status_code=201)

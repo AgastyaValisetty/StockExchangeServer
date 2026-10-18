@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+
+# Start high-performance multi-worker exchange server
+cd "$(dirname "$0")"
+
+WORKERS="${1:-16}"
+
+echo "=========================================================="
+echo " Starting Stock Exchange Server"
+echo " Host     : 0.0.0.0:8000"
+echo " Workers  : ${WORKERS} (Multiprocess GIL bypass)"
+echo " Loop     : uvloop (C-based libuv)"
+echo " Parser   : httptools (C-based HTTP parser)"
+echo "=========================================================="
+
+PYTHONPATH=. uv run uvicorn app.main:app \
+    --host 0.0.0.0 \
+    --port 8000 \
+    --workers "${WORKERS}" \
+    --loop uvloop \
+    --http httptools

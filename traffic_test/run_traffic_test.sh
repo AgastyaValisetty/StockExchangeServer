@@ -29,8 +29,7 @@ fi
 # Verify server is reachable before hammering it
 echo "Checking connection to ${TARGET_URL}..."
 if ! curl -s -f -o /dev/null --max-time 3 "${TARGET_URL}"; then
-    echo "Warning: Could not reach ${TARGET_URL}."
-    echo "  cd python_exchange && PYTHONPATH=. uv run uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    echo "  cd python_exchange && PYTHONPATH=. uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 8 --loop uvloop --http httptools"
     echo ""
     read -p "Do you still want to proceed? (y/N): " -r
     if [[ ! $REPLY =~ ^[Yy]$ ]]; then
