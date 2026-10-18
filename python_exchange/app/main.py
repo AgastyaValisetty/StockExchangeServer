@@ -4,19 +4,25 @@ from anyio.to_thread import current_default_thread_limiter
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import ORJSONResponse
 
+from pydantic import BaseModel
 from app.database import create_tables
 from app.models import OrderRequest
 from app.service import (
     cancel_order,
     create_order,
+    create_orders_batch,
     get_account,
     get_holdings,
     get_order,
+    get_orders_batch,
     get_orderbook,
     get_portfolio,
     get_trades,
     list_orders,
 )
+
+from app.database import SessionLocal, create_tables
+from app.orderbook import global_order_book_manager
 
 create_tables()
 
@@ -26,6 +32,11 @@ async def lifespan(app: FastAPI):
     # Increase AnyIO worker thread limit from default 40 to 500 to prevent request queuing under high concurrency
     limiter = current_default_thread_limiter()
     limiter.total_tokens = 500
+
+    # Recover in-memory order book from persistent SQLite database
+    with SessionLocal() as session:
+        global_order_book_manager.recover_from_db(session)
+
     yield
 
 
@@ -51,6 +62,35 @@ def create_order_endpoint(order_request: OrderRequest):
         "filled_quantity": new_order.filled_quantity,
         "created_at": new_order.created_at.isoformat() if new_order.created_at else None,
     }
+
+
+class BatchGetOrdersRequest(BaseModel):
+    order_ids: list[int]
+
+
+@app.post("/orders/batch", status_code=201)
+def create_orders_batch_endpoint(orders: list[OrderRequest]):
+    created_orders = create_orders_batch(orders)
+    return [
+        {
+            "id": o.id,
+            "account_id": o.account_id,
+            "symbol": o.symbol,
+            "side": o.side,
+            "type": o.type,
+            "price": o.price,
+            "quantity": o.quantity,
+            "status": o.status,
+            "filled_quantity": o.filled_quantity,
+            "created_at": o.created_at.isoformat() if o.created_at else None,
+        }
+        for o in created_orders
+    ]
+
+
+@app.post("/orders/batch-get")
+def get_orders_batch_endpoint(batch_req: BatchGetOrdersRequest):
+    return get_orders_batch(batch_req.order_ids)
 
 
 @app.get("/orders")

@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import Dict, List, Optional, Tuple
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
@@ -11,64 +11,108 @@ from app.models import (
     OrderStatus,
     TradeDB,
 )
+from app.orderbook import (
+    BookOrder,
+    global_order_book_manager,
+)
+
+
+def submit_orders_batch(
+    session: Session, order_requests: List[OrderRequest]
+) -> List[OrderDB]:
+    if not order_requests:
+        return []
+
+    orders: List[OrderDB] = []
+    accounts_cache: Dict[int, AccountDB] = {}
+    holdings_cache: Dict[Tuple[int, str], Optional[AccountHoldingDB]] = {}
+
+    for req in order_requests:
+        if req.account_id not in accounts_cache:
+            acc = session.get(AccountDB, req.account_id)
+            if acc is None:
+                raise HTTPException(
+                    status_code=404, detail=f"Account {req.account_id} not found"
+                )
+            accounts_cache[req.account_id] = acc
+        account = accounts_cache[req.account_id]
+
+        if req.side.value == "buy":
+            required_cash = req.price * req.quantity
+            available_cash = account.balance - account.reserved_balance
+
+            if available_cash < required_cash:
+                raise HTTPException(
+                    status_code=400, detail="Insufficient available cash"
+                )
+
+            account.reserved_balance += required_cash
+
+        elif req.side.value == "sell":
+            h_key = (account.id, req.symbol)
+            if h_key not in holdings_cache:
+                h = (
+                    session.query(AccountHoldingDB)
+                    .filter_by(account_id=account.id, symbol=req.symbol)
+                    .first()
+                )
+                holdings_cache[h_key] = h
+            holding = holdings_cache[h_key]
+
+            if holding is None:
+                raise HTTPException(
+                    status_code=400, detail="No holding found for symbol"
+                )
+
+            available_shares = holding.quantity - holding.reserved_quantity
+
+            if available_shares < req.quantity:
+                raise HTTPException(
+                    status_code=400, detail="Insufficient available shares"
+                )
+
+            holding.reserved_quantity += req.quantity
+
+        new_order = OrderDB(
+            account_id=account.id,
+            symbol=req.symbol,
+            side=req.side.value,
+            type=req.type.value,
+            price=req.price,
+            quantity=req.quantity,
+            status=OrderStatus.OPEN.value,
+            filled_quantity=0,
+            created_at=datetime.now(timezone.utc),
+        )
+        session.add(new_order)
+        orders.append(new_order)
+
+    # Batch flush all orders to get IDs in a single DB operation
+    session.flush()
+
+    # Add to in-memory order book & match each order against resting book
+    for order in orders:
+        book = global_order_book_manager.get_book_for_symbol(order.symbol)
+        book.add(
+            BookOrder(
+                id=order.id,
+                account_id=order.account_id,
+                symbol=order.symbol,
+                side=order.side,
+                price=order.price,
+                quantity=order.quantity,
+                filled_quantity=order.filled_quantity,
+                status=order.status,
+                created_at=order.created_at,
+            )
+        )
+        match_orders(session, order)
+
+    return orders
 
 
 def submit_order(session: Session, order_request: OrderRequest) -> OrderDB:
-    account = session.get(AccountDB, order_request.account_id)
-    if account is None:
-        raise HTTPException(status_code=404, detail="Account not found")
-
-    if order_request.side.value == "buy":
-        required_cash = order_request.price * order_request.quantity
-        available_cash = account.balance - account.reserved_balance
-
-        if available_cash < required_cash:
-            raise HTTPException(
-                status_code=400,
-                detail="Insufficient available cash"
-            )
-
-        account.reserved_balance += required_cash
-
-    elif order_request.side.value == "sell":
-        holding = session.query(AccountHoldingDB).filter_by(
-            account_id=account.id,
-            symbol=order_request.symbol
-        ).first()
-
-        if holding is None:
-            raise HTTPException(
-                status_code=400,
-                detail="No holding found for symbol"
-            )
-
-        available_shares = holding.quantity - holding.reserved_quantity
-
-        if available_shares < order_request.quantity:
-            raise HTTPException(
-                status_code=400,
-                detail="Insufficient available shares"
-            )
-
-        holding.reserved_quantity += order_request.quantity
-
-    new_order = OrderDB(
-        account_id=account.id,
-        symbol=order_request.symbol,
-        side=order_request.side.value,
-        type=order_request.type.value,
-        price=order_request.price,
-        quantity=order_request.quantity,
-        status=OrderStatus.OPEN.value,
-        filled_quantity=0,
-        created_at=datetime.now(timezone.utc),
-    )
-
-    session.add(new_order)
-    session.flush()
-
-    match_orders(session, new_order)
-    return new_order
+    return submit_orders_batch(session, [order_request])[0]
 
 
 def get_matching_orders(
@@ -78,36 +122,21 @@ def get_matching_orders(
     price: int,
     incoming_account_id: Optional[int] = None,
 ) -> List[OrderDB]:
-    opposite_side = "sell" if side == "buy" else "buy"
-    active_statuses = [OrderStatus.OPEN.value, OrderStatus.PARTIALLY_FILLED.value]
+    global_order_book_manager.sync_recent(session)
+    book = global_order_book_manager.get_book_for_symbol(symbol)
+    in_memory_matches = book.get_matching_orders(side, price, incoming_account_id)
 
-    query = session.query(OrderDB).filter(
-        OrderDB.symbol == symbol,
-        OrderDB.side == opposite_side,
-        OrderDB.status.in_(active_statuses),
-        OrderDB.quantity > OrderDB.filled_quantity,
-    )
+    matching_orders: List[OrderDB] = []
+    for m in in_memory_matches:
+        o = session.get(OrderDB, m.id)
+        if (
+            o is not None
+            and o.status in (OrderStatus.OPEN.value, OrderStatus.PARTIALLY_FILLED.value)
+            and o.quantity > o.filled_quantity
+        ):
+            matching_orders.append(o)
 
-    # Self-matching prevention: do not match resting orders belonging to the same account
-    if incoming_account_id is not None:
-        query = query.filter(OrderDB.account_id != incoming_account_id)
-
-    if side == "buy":
-        # Buyer is willing to pay up to `price`; match sells at or below `price`
-        query = query.filter(OrderDB.price <= price).order_by(
-            OrderDB.price.asc(),
-            OrderDB.created_at.asc(),
-            OrderDB.id.asc(),
-        )
-    else:
-        # Seller is willing to sell down to `price`; match buys at or above `price`
-        query = query.filter(OrderDB.price >= price).order_by(
-            OrderDB.price.desc(),
-            OrderDB.created_at.asc(),
-            OrderDB.id.asc(),
-        )
-
-    return query.all()
+    return matching_orders
 
 
 def update_order_fill(order: OrderDB, fill_qty: int) -> None:
@@ -146,9 +175,15 @@ def execute_trade(
     )
     session.add(trade)
 
-    # Update filled quantities and order statuses
+    # Update filled quantities and order statuses in DB
     update_order_fill(buy_order, quantity)
     update_order_fill(sell_order, quantity)
+
+    # Update in-memory order books
+    buy_book = global_order_book_manager.get_book_for_symbol(buy_order.symbol)
+    buy_book.update_fill(buy_order.id, quantity)
+    sell_book = global_order_book_manager.get_book_for_symbol(sell_order.symbol)
+    sell_book.update_fill(sell_order.id, quantity)
 
     # Buyer accounting
     buyer_account = session.get(AccountDB, buy_order.account_id)
@@ -158,10 +193,14 @@ def execute_trade(
         # Release the reservation for the filled quantity at order's limit price
         buyer_account.reserved_balance -= buy_order.price * quantity
 
-    buyer_holding = session.query(AccountHoldingDB).filter_by(
-        account_id=buy_order.account_id,
-        symbol=buy_order.symbol,
-    ).first()
+    buyer_holding = (
+        session.query(AccountHoldingDB)
+        .filter_by(
+            account_id=buy_order.account_id,
+            symbol=buy_order.symbol,
+        )
+        .first()
+    )
 
     if buyer_holding is None:
         buyer_holding = AccountHoldingDB(
@@ -180,10 +219,14 @@ def execute_trade(
         proceeds = price * quantity
         seller_account.balance += proceeds
 
-    seller_holding = session.query(AccountHoldingDB).filter_by(
-        account_id=sell_order.account_id,
-        symbol=sell_order.symbol,
-    ).first()
+    seller_holding = (
+        session.query(AccountHoldingDB)
+        .filter_by(
+            account_id=sell_order.account_id,
+            symbol=sell_order.symbol,
+        )
+        .first()
+    )
 
     if seller_holding is not None:
         seller_holding.quantity -= quantity
@@ -241,7 +284,7 @@ def cancel_order(session: Session, order_id: int) -> OrderDB:
     if order.status not in (OrderStatus.OPEN.value, OrderStatus.PARTIALLY_FILLED.value):
         raise HTTPException(
             status_code=400,
-            detail=f"Cannot cancel order with status '{order.status}'"
+            detail=f"Cannot cancel order with status '{order.status}'",
         )
 
     remaining_qty = order.quantity - order.filled_quantity
@@ -251,60 +294,26 @@ def cancel_order(session: Session, order_id: int) -> OrderDB:
             if account is not None:
                 release_buy_reservation(session, account, order, remaining_qty)
         elif order.side == "sell":
-            holding = session.query(AccountHoldingDB).filter_by(
-                account_id=order.account_id,
-                symbol=order.symbol,
-            ).first()
+            holding = (
+                session.query(AccountHoldingDB)
+                .filter_by(
+                    account_id=order.account_id,
+                    symbol=order.symbol,
+                )
+                .first()
+            )
             if holding is not None:
                 release_sell_reservation(session, holding, order, remaining_qty)
 
     order.status = OrderStatus.CANCELLED.value
+    # Remove from in-memory book
+    book = global_order_book_manager.get_book_for_symbol(order.symbol)
+    book.remove(order.id)
+
     return order
 
 
 def get_orderbook(session: Session, symbol: str) -> dict:
-    active_statuses = [OrderStatus.OPEN.value, OrderStatus.PARTIALLY_FILLED.value]
-
-    bids = (
-        session.query(OrderDB)
-        .filter(
-            OrderDB.symbol == symbol,
-            OrderDB.side == "buy",
-            OrderDB.status.in_(active_statuses),
-            OrderDB.quantity > OrderDB.filled_quantity,
-        )
-        .order_by(OrderDB.price.desc(), OrderDB.created_at.asc(), OrderDB.id.asc())
-        .all()
-    )
-
-    asks = (
-        session.query(OrderDB)
-        .filter(
-            OrderDB.symbol == symbol,
-            OrderDB.side == "sell",
-            OrderDB.status.in_(active_statuses),
-            OrderDB.quantity > OrderDB.filled_quantity,
-        )
-        .order_by(OrderDB.price.asc(), OrderDB.created_at.asc(), OrderDB.id.asc())
-        .all()
-    )
-
-    return {
-        "symbol": symbol,
-        "bids": [
-            {
-                "id": b.id,
-                "price": b.price,
-                "quantity": b.quantity - b.filled_quantity,
-            }
-            for b in bids
-        ],
-        "asks": [
-            {
-                "id": a.id,
-                "price": a.price,
-                "quantity": a.quantity - a.filled_quantity,
-            }
-            for a in asks
-        ],
-    }
+    global_order_book_manager.sync_recent(session)
+    book = global_order_book_manager.get_book_for_symbol(symbol)
+    return book.to_dict()

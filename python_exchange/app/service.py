@@ -7,6 +7,7 @@ from app.engine import (
     cancel_order as engine_cancel_order,
     get_orderbook as engine_get_orderbook,
     submit_order as engine_submit_order,
+    submit_orders_batch as engine_submit_orders_batch,
 )
 from app.models import (
     AccountDB,
@@ -31,6 +32,43 @@ def create_order(order_request: OrderRequest) -> OrderDB:
         session.refresh(order)
         session.expunge(order)
         return order
+
+
+def create_orders_batch(order_requests: List[OrderRequest]) -> List[OrderDB]:
+    with SessionLocal() as session:
+        orders = engine_submit_orders_batch(session, order_requests)
+        session.commit()
+        for o in orders:
+            session.refresh(o)
+            session.expunge(o)
+        return orders
+
+
+def get_orders_batch(order_ids: List[int]) -> List[dict]:
+    if not order_ids:
+        return []
+    with SessionLocal() as session:
+        orders = (
+            session.query(OrderDB)
+            .filter(OrderDB.id.in_(order_ids))
+            .order_by(OrderDB.id)
+            .all()
+        )
+        return [
+            {
+                "id": o.id,
+                "account_id": o.account_id,
+                "symbol": o.symbol,
+                "side": o.side,
+                "type": o.type,
+                "price": o.price,
+                "quantity": o.quantity,
+                "status": o.status,
+                "filled_quantity": o.filled_quantity,
+                "created_at": o.created_at.isoformat() if o.created_at else None,
+            }
+            for o in orders
+        ]
 
 
 def cancel_order(order_id: int) -> OrderDB:

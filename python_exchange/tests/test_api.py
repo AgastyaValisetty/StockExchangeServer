@@ -157,3 +157,25 @@ def test_api_portfolio():
     assert "total_portfolio_value" in data
     assert "total_unrealized_pnl" in data
     assert "holdings" in data
+
+
+def test_api_batch_orders():
+    # Submit batch of 3 buy orders in a single transaction
+    orders_payload = [
+        {"account_id": 1, "symbol": "AAPL", "side": "buy", "price": 100, "quantity": 2},
+        {"account_id": 1, "symbol": "MSFT", "side": "buy", "price": 200, "quantity": 1},
+        {"account_id": 1, "symbol": "TSLA", "side": "buy", "price": 300, "quantity": 1},
+    ]
+    res = client.post("/orders/batch", json=orders_payload)
+    assert res.status_code == 201
+    created = res.json()
+    assert len(created) == 3
+    order_ids = [o["id"] for o in created]
+
+    # Batch get
+    get_res = client.post("/orders/batch-get", json={"order_ids": order_ids})
+    assert get_res.status_code == 200
+    retrieved = get_res.json()
+    assert len(retrieved) == 3
+    assert [o["id"] for o in retrieved] == order_ids
+

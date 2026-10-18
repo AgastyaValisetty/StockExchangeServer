@@ -20,12 +20,16 @@ def set_sqlite_pragma(dbapi_connection, connection_record):
     cursor.execute("PRAGMA journal_mode=WAL")
     # NORMAL synchronous mode reduces fsync pauses while remaining durable in WAL
     cursor.execute("PRAGMA synchronous=NORMAL")
-    # Busy timeout prevents immediate lock failures under high concurrent load
-    cursor.execute("PRAGMA busy_timeout=5000")
+    # Busy timeout: wait up to 10 seconds under concurrent write contention
+    cursor.execute("PRAGMA busy_timeout=10000")
     # 64MB memory page cache for fast lookups
     cursor.execute("PRAGMA cache_size=-64000")
     # Memory-mapped I/O up to 256MB
     cursor.execute("PRAGMA mmap_size=268435456")
+    # Defer WAL checkpointing to avoid pausing writers every 1000 pages
+    cursor.execute("PRAGMA wal_autocheckpoint=10000")
+    # Disable full fsync on checkpoints for faster write cycles
+    cursor.execute("PRAGMA checkpoint_fullfsync=0")
     cursor.close()
 
 

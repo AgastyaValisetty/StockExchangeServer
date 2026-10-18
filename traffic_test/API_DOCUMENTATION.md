@@ -38,9 +38,32 @@ Base URL: `http://localhost:8000`
   }
   ```
 
+### 1.2 `POST /orders/batch`
+- **Purpose**: Submit multiple limit orders in a single atomic transaction. Mitigates database write-lock contention by acquiring one write lock and performing one fsync for the entire batch.
+- **Status Code**: `201 Created`
+- **Request Body (JSON array)**:
+  ```json
+  [
+    { "symbol": "AAPL", "side": "buy", "type": "limit", "price": 150, "quantity": 10, "account_id": 1 },
+    { "symbol": "MSFT", "side": "buy", "type": "limit", "price": 300, "quantity": 5, "account_id": 1 }
+  ]
+  ```
+- **Response (JSON array)**: List of created orders.
+
 ---
 
-### 1.2 `GET /orders`
+### 1.3 `POST /orders/batch-get`
+- **Purpose**: Retrieve multiple orders by their IDs in a single SQL query (`IN (...)`).
+- **Status Code**: `200 OK`
+- **Request Body (JSON)**:
+  ```json
+  { "order_ids": [1, 2, 3] }
+  ```
+- **Response (JSON array)**: List of retrieved order details.
+
+---
+
+### 1.4 `GET /orders`
 - **Purpose**: List all orders with optional filtering by symbol and status.
 - **Query Parameters**:
   - `symbol` *(optional, string)*: e.g. `AAPL`
