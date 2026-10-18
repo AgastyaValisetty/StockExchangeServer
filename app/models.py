@@ -1,6 +1,6 @@
 from enum import Enum
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import String, Integer
+from sqlalchemy import String, Integer, ForeignKey, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base, engine
@@ -36,6 +36,7 @@ class OrderRequest(BaseModel):
 class OrderDB(Base):
     __tablename__ = "orders"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"), nullable=False)
     symbol: Mapped[str] = mapped_column(String(10), nullable=False)
     side: Mapped[str] = mapped_column(String(4), nullable=False)
     type: Mapped[str] = mapped_column(String(5), nullable=False)
@@ -45,3 +46,20 @@ class OrderDB(Base):
         String(20), nullable=False, default=OrderStatus.OPEN.value
         )
     filled_quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+class AccountDB(Base):
+    __tablename__ = "accounts"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    balance: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    reserved_balance: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+class AccountHoldingDB(Base):
+    __tablename__ = "account_holdings"
+    __table_args = (
+        UniqueConstraint("account_id", "symbol", name="uq_account_symbol")
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"), nullable=False)
+    symbol: Mapped[str] = mapped_column(String(10), nullable=False)
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    reserved_quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
