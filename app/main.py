@@ -24,7 +24,7 @@ def create_order_endpoint(order_request: OrderRequest):
 @app.get("/orders")
 def list_orders():
     with SessionLocal() as session:
-        orders = session.query(OrderDB).all()
+        orders = session.query(OrderDB).order_by(OrderDB.id).all()
         return [
             {
                 "id": order.id,
