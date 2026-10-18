@@ -1,4 +1,6 @@
+from contextlib import asynccontextmanager
 from typing import Optional
+from anyio.to_thread import current_default_thread_limiter
 from fastapi import FastAPI, HTTPException, Query
 
 from app.database import create_tables
@@ -17,7 +19,16 @@ from app.service import (
 
 create_tables()
 
-app = FastAPI(title="Paper Exchange")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Increase AnyIO worker thread limit from default 40 to 500 to prevent request queuing under high concurrency
+    limiter = current_default_thread_limiter()
+    limiter.total_tokens = 500
+    yield
+
+
+app = FastAPI(title="Paper Exchange", lifespan=lifespan)
 
 
 @app.post("/orders", status_code=201)

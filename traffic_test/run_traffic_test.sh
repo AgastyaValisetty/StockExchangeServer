@@ -4,7 +4,7 @@
 # Duration: 25 seconds
 
 TARGET_URL="${1:-http://localhost:8000/account}"
-CONNECTIONS="${2:-100}"
+CONNECTIONS="${2:-500}"
 DURATION=60
 
 echo "=========================================================="
@@ -30,8 +30,7 @@ fi
 echo "Checking connection to ${TARGET_URL}..."
 if ! curl -s -f -o /dev/null --max-time 3 "${TARGET_URL}"; then
     echo "Warning: Could not reach ${TARGET_URL}."
-    echo "Ensure your FastAPI server is running with:"
-    echo "  uv run uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    echo "  cd python_exchange && PYTHONPATH=. uv run uvicorn app.main:app --host 0.0.0.0 --port 8000"
     echo ""
     read -p "Do you still want to proceed? (y/N): " -r
     if [[ ! $REPLY =~ ^[Yy]$ ]]; then
