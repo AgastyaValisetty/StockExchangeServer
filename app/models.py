@@ -45,7 +45,3 @@ class OrderDB(Base):
         String(20), nullable=False, default=OrderStatus.OPEN.value
         )
     filled_quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-
-
-def create_tables():
-    Base.metadata.create_all(bind=engine)

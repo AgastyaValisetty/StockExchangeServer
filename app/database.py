@@ -9,3 +9,8 @@ class Base(DeclarativeBase):
     pass
 
 SessionLocal = sessionmaker(bind=engine)
+
+
+
+def create_tables():
+    Base.metadata.create_all(bind=engine)
