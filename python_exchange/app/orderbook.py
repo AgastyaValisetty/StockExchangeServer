@@ -1,3 +1,4 @@
+import orjson
 from datetime import datetime
 from typing import Dict, List, Optional
 from sqlalchemy.orm import Session
@@ -375,6 +376,22 @@ class SymbolOrderBook:
         self.asks: RedBlackTree = RedBlackTree()
         # Direct O(1) hash map lookup by order ID
         self.orders: Dict[int, OrderNode] = {}
+        # Pre-serialized JSON byte cache for microsecond socket writing
+        self._cached_bytes: Optional[bytes] = None
+        self._dirty: bool = True
+
+    def mark_dirty(self) -> None:
+        self._dirty = True
+        self._cached_bytes = None
+
+    def get_json_bytes(self) -> bytes:
+        if not self._dirty and self._cached_bytes is not None:
+            return self._cached_bytes
+
+        data = self.to_dict()
+        self._cached_bytes = orjson.dumps(data)
+        self._dirty = False
+        return self._cached_bytes
 
     def add(self, node: OrderNode) -> None:
         if node.status not in ("open", "partially_filled"):
@@ -397,6 +414,7 @@ class SymbolOrderBook:
             level = rb_node.val
 
         level.append(node)
+        self.mark_dirty()
 
     def remove(self, order_id: int) -> Optional[OrderNode]:
         """O(1) cancellation via direct pointer and price-level removal."""
@@ -411,6 +429,7 @@ class SymbolOrderBook:
                 tree = self.bids if node.side == "buy" else self.asks
                 tree.delete(node.price)
 
+        self.mark_dirty()
         return node
 
     def update_fill(self, order_id: int, fill_qty: int) -> None:
@@ -426,6 +445,7 @@ class SymbolOrderBook:
             node.status = "partially_filled"
             if node.price_level is not None:
                 node.price_level.total_volume -= fill_qty
+            self.mark_dirty()
 
     def get_matching_orders(
         self,
@@ -575,6 +595,10 @@ class OrderBookManager:
                 )
             elif o.status in ("filled", "cancelled"):
                 book.remove(o.id)
+
+    def get_orderbook_bytes(self, symbol: str) -> bytes:
+        book = self.get_book_for_symbol(symbol)
+        return book.get_json_bytes()
 
 
 # Global singleton instance

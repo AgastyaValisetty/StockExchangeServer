@@ -1,7 +1,7 @@
 from contextlib import asynccontextmanager
 from typing import Optional
 from anyio.to_thread import current_default_thread_limiter
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Response
 from fastapi.responses import ORJSONResponse
 
 from pydantic import BaseModel
@@ -12,10 +12,13 @@ from app.service import (
     create_order,
     create_orders_batch,
     get_account,
+    get_account_json_bytes,
     get_holdings,
+    get_holdings_json_bytes,
     get_order,
     get_orders_batch,
     get_orderbook,
+    get_orderbook_bytes,
     get_portfolio,
     get_trades,
     list_orders,
@@ -137,12 +140,12 @@ def cancel_order_endpoint(id: int):
 
 @app.get("/account")
 def get_account_endpoint(account_id: int = Query(1, description="Account ID")):
-    return get_account(account_id)
+    return Response(content=get_account_json_bytes(account_id), media_type="application/json")
 
 
 @app.get("/holdings")
 def get_holdings_endpoint(account_id: int = Query(1, description="Account ID")):
-    return get_holdings(account_id)
+    return Response(content=get_holdings_json_bytes(account_id), media_type="application/json")
 
 
 @app.get("/trades")
@@ -155,7 +158,7 @@ def get_trades_endpoint(
 
 @app.get("/orderbook/{symbol}")
 def get_orderbook_endpoint(symbol: str):
-    return get_orderbook(symbol)
+    return Response(content=get_orderbook_bytes(symbol), media_type="application/json")
 
 
 @app.get("/portfolio")

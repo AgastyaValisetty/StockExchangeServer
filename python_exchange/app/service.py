@@ -1,8 +1,8 @@
-from typing import List, Optional
+from typing import Dict, List, Optional
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from app.database import SessionLocal
+from app.database import SessionLocal, engine
 from app.engine import (
     cancel_order as engine_cancel_order,
     get_orderbook as engine_get_orderbook,
@@ -16,6 +16,7 @@ from app.models import (
     OrderRequest,
     TradeDB,
 )
+from app.orderbook import global_order_book_manager
 
 SIMULATED_PRICES = {
     "AAPL": 15000,
@@ -24,6 +25,47 @@ SIMULATED_PRICES = {
     "TSLA": 20000,
 }
 
+# In-memory account cache: account_id -> json_bytes
+_account_cache: Dict[int, bytes] = {}
+
+
+def invalidate_account_cache(account_id: Optional[int] = None) -> None:
+    if account_id is None:
+        _account_cache.clear()
+    else:
+        _account_cache.pop(account_id, None)
+
+
+def get_account_json_bytes(account_id: int = 1) -> bytes:
+    cached = _account_cache.get(account_id)
+    if cached is not None:
+        return cached
+
+    # Ultra-fast path: SQLite native C json_object execution
+    with engine.connect() as conn:
+        res = conn.exec_driver_sql(
+            "SELECT json_object('account_id', id, 'balance', balance, 'reserved_balance', reserved_balance, 'available_balance', (balance - reserved_balance)) FROM accounts WHERE id = ?",
+            (account_id,),
+        ).scalar()
+        if res is None:
+            raise HTTPException(status_code=404, detail="Account not found")
+        content = res.encode("utf-8")
+        _account_cache[account_id] = content
+        return content
+
+
+def get_holdings_json_bytes(account_id: int = 1) -> bytes:
+    with engine.connect() as conn:
+        res = conn.exec_driver_sql(
+            "SELECT coalesce(json_group_array(json_object('symbol', symbol, 'quantity', quantity, 'reserved_quantity', reserved_quantity, 'available_quantity', (quantity - reserved_quantity))), '[]') FROM account_holdings WHERE account_id = ?",
+            (account_id,),
+        ).scalar()
+        return res.encode("utf-8") if res else b"[]"
+
+
+def get_orderbook_bytes(symbol: str) -> bytes:
+    return global_order_book_manager.get_orderbook_bytes(symbol)
+
 
 def create_order(order_request: OrderRequest) -> OrderDB:
     with SessionLocal() as session:
@@ -31,6 +73,7 @@ def create_order(order_request: OrderRequest) -> OrderDB:
         session.commit()
         session.refresh(order)
         session.expunge(order)
+        invalidate_account_cache()
         return order
 
 
@@ -41,6 +84,7 @@ def create_orders_batch(order_requests: List[OrderRequest]) -> List[OrderDB]:
         for o in orders:
             session.refresh(o)
             session.expunge(o)
+        invalidate_account_cache()
         return orders
 
 

@@ -18,4 +18,6 @@ PYTHONPATH=. uv run uvicorn app.main:app \
     --port 8000 \
     --workers "${WORKERS}" \
     --loop uvloop \
-    --http httptools
+    --http httptools \
+    --backlog 4096 \
+    --limit-concurrency 2000
