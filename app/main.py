@@ -2,7 +2,7 @@ from fastapi import FastAPI, HTTPException
 from app.database import create_tables, SessionLocal
 from app.models import AccountDB, OrderDB, OrderRequest
 from app.service import create_order
-#test comment
+
 create_tables()
 
 app = FastAPI(title="Paper Exchange")
