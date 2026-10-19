@@ -1,7 +1,8 @@
+import gc
 from contextlib import asynccontextmanager
 from typing import Optional
 from anyio.to_thread import current_default_thread_limiter
-from fastapi import FastAPI, HTTPException, Query, Response
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import ORJSONResponse
 
 from pydantic import BaseModel
@@ -22,6 +23,7 @@ from app.service import (
     get_portfolio,
     get_trades,
     list_orders,
+    warmup_account_cache,
 )
 
 from app.database import SessionLocal, create_tables
@@ -32,13 +34,21 @@ create_tables()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Increase AnyIO worker thread limit from default 40 to 500 to prevent request queuing under high concurrency
+    # Increase AnyIO worker thread limit from default 40 to 500
     limiter = current_default_thread_limiter()
     limiter.total_tokens = 500
 
     # Recover in-memory order book from persistent SQLite database
     with SessionLocal() as session:
         global_order_book_manager.recover_from_db(session)
+
+    # Pre-warm account cache for all existing accounts (zero DB latency on initial reads)
+    warmup_account_cache()
+
+    # Freeze GC memory to prevent cyclic collection pauses on long-lived startup objects
+    gc.collect()
+    gc.freeze()
+    gc.set_threshold(50_000, 20, 20)
 
     yield
 
@@ -47,6 +57,10 @@ app = FastAPI(
     title="Paper Exchange",
     default_response_class=ORJSONResponse,
     lifespan=lifespan,
+    openapi_url=None,
+    docs_url=None,
+    redoc_url=None,
+    redirect_slashes=False,
 )
 
 
@@ -139,13 +153,31 @@ def cancel_order_endpoint(id: int):
 
 
 @app.get("/account")
-def get_account_endpoint(account_id: int = Query(1, description="Account ID")):
-    return Response(content=get_account_json_bytes(account_id), media_type="application/json")
+async def get_account_endpoint(request: Request):
+    qs = request.scope.get("query_string", b"")
+    if not qs or qs == b"account_id=1":
+        aid = 1
+    else:
+        aid_str = request.query_params.get("account_id", "1")
+        try:
+            aid = int(aid_str)
+        except ValueError:
+            aid = 1
+    return Response(content=get_account_json_bytes(aid), media_type="application/json")
 
 
 @app.get("/holdings")
-def get_holdings_endpoint(account_id: int = Query(1, description="Account ID")):
-    return Response(content=get_holdings_json_bytes(account_id), media_type="application/json")
+async def get_holdings_endpoint(request: Request):
+    qs = request.scope.get("query_string", b"")
+    if not qs or qs == b"account_id=1":
+        aid = 1
+    else:
+        aid_str = request.query_params.get("account_id", "1")
+        try:
+            aid = int(aid_str)
+        except ValueError:
+            aid = 1
+    return Response(content=get_holdings_json_bytes(aid), media_type="application/json")
 
 
 @app.get("/trades")
@@ -157,8 +189,8 @@ def get_trades_endpoint(
 
 
 @app.get("/orderbook/{symbol}")
-def get_orderbook_endpoint(symbol: str):
-    return Response(content=get_orderbook_bytes(symbol), media_type="application/json")
+async def get_orderbook_endpoint(symbol: str):
+    return Response(content=get_orderbook_bytes(symbol.upper()), media_type="application/json")
 
 
 @app.get("/portfolio")

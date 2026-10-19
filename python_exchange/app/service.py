@@ -36,6 +36,19 @@ def invalidate_account_cache(account_id: Optional[int] = None) -> None:
         _account_cache.pop(account_id, None)
 
 
+def warmup_account_cache() -> None:
+    try:
+        with engine.connect() as conn:
+            rows = conn.exec_driver_sql(
+                "SELECT id, json_object('account_id', id, 'balance', balance, 'reserved_balance', reserved_balance, 'available_balance', (balance - reserved_balance)) FROM accounts"
+            ).fetchall()
+            for acc_id, json_str in rows:
+                if json_str:
+                    _account_cache[acc_id] = json_str.encode("utf-8")
+    except Exception:
+        pass
+
+
 def get_account_json_bytes(account_id: int = 1) -> bytes:
     cached = _account_cache.get(account_id)
     if cached is not None:

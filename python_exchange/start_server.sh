@@ -3,7 +3,7 @@
 # Start high-performance multi-worker exchange server
 cd "$(dirname "$0")"
 
-WORKERS="${1:-16}"
+WORKERS="${1:-32}"
 
 echo "=========================================================="
 echo " Starting Stock Exchange Server"
@@ -20,4 +20,9 @@ PYTHONPATH=. uv run uvicorn app.main:app \
     --loop uvloop \
     --http httptools \
     --backlog 4096 \
-    --limit-concurrency 2000
+    --limit-concurrency 2000 \
+    --no-access-log \
+    --no-server-header \
+    --no-date-header \
+    --no-proxy-headers \
+    --timeout-keep-alive 75

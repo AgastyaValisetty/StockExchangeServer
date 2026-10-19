@@ -6,7 +6,7 @@ DATABASE_URL = "sqlite:///./data/exchange.db"
 # QueuePool configured to allow high-concurrency requests without blocking on connections
 engine = create_engine(
     DATABASE_URL,
-    connect_args={"check_same_thread": False, "timeout": 30},
+    connect_args={"check_same_thread": False, "timeout": 30, "cached_statements": 64},
     pool_size=100,
     max_overflow=200,
     pool_timeout=30.0,
@@ -23,9 +23,11 @@ def set_sqlite_pragma(dbapi_connection, connection_record):
     # Busy timeout: wait up to 10 seconds under concurrent write contention
     cursor.execute("PRAGMA busy_timeout=10000")
     # 64MB memory page cache for fast lookups
-    cursor.execute("PRAGMA cache_size=-64000")
-    # Memory-mapped I/O up to 256MB
-    cursor.execute("PRAGMA mmap_size=268435456")
+    cursor.execute("PRAGMA cache_size=-65536")
+    # Memory-mapped I/O up to 1GB to read SQLite file via OS page cache with zero userland copies
+    cursor.execute("PRAGMA mmap_size=1073741824")
+    # Keep temporary tables and indices entirely in RAM
+    cursor.execute("PRAGMA temp_store=MEMORY")
     # Defer WAL checkpointing to avoid pausing writers every 1000 pages
     cursor.execute("PRAGMA wal_autocheckpoint=10000")
     # Disable full fsync on checkpoints for faster write cycles
